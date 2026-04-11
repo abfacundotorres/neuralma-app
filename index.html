@@ -844,14 +844,38 @@ function startT1(){
       ctx.fillStyle=`hsla(${p.hue+lastSpd*20},100%,72%,${p.a})`;
       ctx.fill();
     });
-    // Conexiones entre nodos cercanos — más visibles con calma
-    const connAlpha=Math.max(.03,.12*(1-lastSpd*.8));
-    for(let i=0;i<larges.length;i++)for(let j=i+1;j<larges.length;j++){
-      const dx=larges[i].x-larges[j].x,dy=larges[i].y-larges[j].y,d2=dx*dx+dy*dy;
-      if(d2<W*W*.12){
-        ctx.beginPath();ctx.moveTo(larges[i].x,larges[i].y);ctx.lineTo(larges[j].x,larges[j].y);
-        ctx.strokeStyle=`rgba(184,255,0,${connAlpha*(1-d2/(W*W*.12))})`;
-        ctx.lineWidth=.6;ctx.stroke();
+    // Redes entre nodos: cuanto más quieto más densa y visible la red
+    const calm=Math.max(0,1-lastSpd*2.8); // 1=quieto total, 0=movimiento fuerte
+    const connAlpha=calm*calm*.55;         // cuadrático → solo aparece con calma real
+    const connDist=W*(0.18+calm*.7);       // distancia: 18% quieto → 88% con calma total
+    if(connAlpha>.015){
+      for(let i=0;i<larges.length;i++)for(let j=i+1;j<larges.length;j++){
+        const dx=larges[i].x-larges[j].x,dy=larges[i].y-larges[j].y,d2=dx*dx+dy*dy;
+        if(d2<connDist*connDist){
+          const fade=1-d2/(connDist*connDist);
+          ctx.beginPath();ctx.moveTo(larges[i].x,larges[i].y);ctx.lineTo(larges[j].x,larges[j].y);
+          ctx.strokeStyle=`rgba(184,255,0,${connAlpha*fade})`;
+          ctx.lineWidth=.5+calm*.8;
+          ctx.stroke();
+          // Nodo en intersección — pequeño punto en cada extremo de la conexión
+          if(calm>.5){
+            ctx.beginPath();ctx.arc(larges[i].x,larges[i].y,1.5*calm,0,6.283);
+            ctx.fillStyle=`rgba(184,255,0,${connAlpha*.8})`;ctx.fill();
+          }
+        }
+      }
+    }
+    // También conectar partículas pequeñas cercanas cuando hay mucha calma
+    if(calm>.65){
+      const sConnAlpha=(calm-.65)/.35*.18;
+      const sConnDist=W*.14;
+      for(let i=0;i<smalls.length;i+=2)for(let j=i+2;j<smalls.length;j+=2){
+        const dx=smalls[i].x-smalls[j].x,dy=smalls[i].y-smalls[j].y,d2=dx*dx+dy*dy;
+        if(d2<sConnDist*sConnDist){
+          ctx.beginPath();ctx.moveTo(smalls[i].x,smalls[i].y);ctx.lineTo(smalls[j].x,smalls[j].y);
+          ctx.strokeStyle=`rgba(184,255,0,${sConnAlpha*(1-d2/(sConnDist*sConnDist))})`;
+          ctx.lineWidth=.3;ctx.stroke();
+        }
       }
     }
   }
@@ -863,14 +887,31 @@ function startT1(){
     else{
       const xs=S.t1.tx,ys=S.t1.ty;
       if(xs.length>4){
-        let minX=xs[0],maxX=xs[0],minY=ys[0],maxY=ys[0],sumX=0,sumX2=0;
-        for(let i=0;i<xs.length;i++){if(xs[i]<minX)minX=xs[i];if(xs[i]>maxX)maxX=xs[i];if(ys[i]<minY)minY=ys[i];if(ys[i]>maxY)maxY=ys[i];sumX+=xs[i];}
-        S.t1.range=Math.min(1,((maxX-minX)+(maxY-minY))/2);
+        // Promedio de magnitud de movimiento (más sensible a cómo se mueve, no al máximo)
+        let sumMag=0,sumX=0,sumX2=0;
+        for(let i=0;i<xs.length;i++){
+          sumMag+=Math.hypot(xs[i],ys[i]);
+          sumX+=xs[i];
+        }
+        const avgMag=sumMag/xs.length; // promedio de magnitud por muestra
+        S.t1.range=Math.min(1,avgMag*2.2); // reemplaza range: ahora es avg de actividad
         const mx=sumX/xs.length;
         for(let i=0;i<xs.length;i++)sumX2+=(xs[i]-mx)**2;
         S.t1.variance=Math.min(1,sumX2/xs.length*9);
-        let path=0;for(let i=1;i<xs.length;i++)path+=Math.hypot(xs[i]-xs[i-1],ys[i]-ys[i-1]);
+        // path: variabilidad temporal (cambios de dirección)
+        let path=0,dirChanges=0;
+        for(let i=1;i<xs.length;i++){
+          path+=Math.hypot(xs[i]-xs[i-1],ys[i]-ys[i-1]);
+          if(i>1){
+            const d1=Math.atan2(ys[i-1]-ys[i-2],xs[i-1]-xs[i-2]);
+            const d2=Math.atan2(ys[i]-ys[i-1],xs[i]-xs[i-1]);
+            let diff=Math.abs(d2-d1);if(diff>Math.PI)diff=2*Math.PI-diff;
+            if(diff>.4)dirChanges++;
+          }
+        }
         S.t1.path=Math.min(1,path/22);
+        // Enriquecer variance con cambios de dirección
+        S.t1.variance=Math.min(1,S.t1.variance*.7+(dirChanges/xs.length)*4*.3);
       }else{S.fake.t1=true;Object.assign(S.t1,FAKE.t1());}
     }
     cv.style.transition='opacity .26s';cv.style.opacity='0';setTimeout(()=>showDone(1,2),300);
