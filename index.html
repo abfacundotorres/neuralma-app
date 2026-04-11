@@ -1086,33 +1086,53 @@ function proc(){
 function score(){
   const{t1,t2,t3}=S;
 
-  // T1 — inclinación
-  // Añadimos ruido aleatorio suave para mayor variedad entre personas similares
-  const jit=()=>(Math.random()-.5)*.08;
-  const t1t=(t1.range*.38+t1.variance*.34+t1.path*.28)+jit();
-  const t1a=((1-Math.abs(t1.range-.35)*.7)*(1-Math.abs(t1.variance-.08)*1.0))+jit();
-  const t1b=((1-t1.range)*.38+(1-t1.variance)*.30+(1-t1.path)*.32)+jit();
+  // Cada prueba produce señales independientes para theta/alpha/beta.
+  // Diseñadas para distribuirse uniformemente entre los 7 arquetipos.
 
-  // T2 — equilibrio
-  const td=t2.touchDur||0;
-  const t2t=(t2.amp*.44+t2.freq*.34+(1-td)*.22)+jit();
-  const t2a=((1-t2.amp)*.44+(1-t2.freq)*.26+td*.30)+jit();
-  const t2b=((1-t2.amp)*.28+t2.freq*.38+td*.34)+jit();
+  // T1 INCLINACIÓN
+  // range=promedio magnitud, variance=irregularidad, path=continuidad
+  const r=t1.range,v=t1.variance,p=t1.path;
+  const t1t=r*.5+v*.5;                                      // amplio+errático → theta
+  const t1a=Math.max(0,1-Math.abs(r-.25)*4)*.55+Math.max(0,1-v*7)*.45; // suave+moderado → alpha
+  const t1b=(1-r)*.55+(1-v)*.45;                           // quieto+preciso → beta
 
-  // T3 — trazo
-  const cov=t3.cov,spd=Math.min(1,t3.spd/300),str=Math.min(1,t3.strokes/5);
+  // T2 EQUILIBRIO
+  // Alta sensibilidad: calma real genera alpha fuerte, inestabilidad genera theta
+  const td=t2.touchDur||0,amp=t2.amp,freq=t2.freq;
+  const t2t=amp*.55+freq*.25+(1-td)*.2;
+  const t2a=Math.max(0,1-amp*2.2)*.6+td*.4;               // alpha: calma corporal + presencia
+  const t2b=Math.max(0,1-amp*1.4)*.35+freq*.35+td*.3;     // beta: estabilidad activa
+
+  // T3 TRAZO
+  const cov=t3.cov,spd=Math.min(1,t3.spd/260);
+  const str=Math.min(1,t3.strokes/5);
   const cont=t3.cont?1:0,pau=Math.min(1,t3.pauses/3);
-  const t3t=(pau*.38+cov*.36+(1-cont)*.26)+jit();
-  const t3a=(cont*.44+(1-spd)*.30+(1-str)*.26)+jit();
-  const t3b=(spd*.40+str*.36+(1-cov)*.24)+jit();
+  const t3t=str*.3+cov*.45+pau*.25;
+  const t3a=cont*.55+Math.max(0,1-spd*2.2)*.25+Math.max(0,1-str*1.8)*.2; // alpha: trazo único+lento
+  const t3b=spd*.52+str*.28+(1-cont)*.2;
 
-  // Pesos combinados
-  let th=t1t*.32+t2t*.36+t3t*.32;
-  let al=t1a*.32+t2a*.36+t3a*.32;
-  let be=t1b*.32+t2b*.36+t3b*.32;
+  // Normalizar cada dimensión por prueba antes de combinar
+  // Así ninguna prueba puede dominar con valores absolutos altos
+  const normT=(t1t+t2t+t3t)/3;
+  const normA=(t1a+t2a+t3a)/3;
+  const normB=(t1b+t2b+t3b)/3;
 
-  // Mínimo más bajo para mayor variedad
-  th=Math.max(.06,th);al=Math.max(.06,al);be=Math.max(.06,be);
+  // Amplificar diferencias: elevar al cuadrado preservando signo
+  // Esto hace que dominancias débiles sean más decisivas
+  const boost=v=>{const s=v-.333;return .333+s*Math.abs(s)*4;};
+  let th=boost(normT/(normT+normA+normB));
+  let al=boost(normA/(normT+normA+normB));
+  let be=boost(normB/(normT+normA+normB));
+
+  // Ruido determinístico basado en datos reales del usuario
+  // Amplitud .18 para romper empates frecuentes sin ser aleatorio puro
+  const seed=((t1.path*997|0)^(t2.touchMs*.13|0)^(t3.len*0.7|0)^(t3.strokes*113))&0xffff;
+  const prng=n=>{let h=seed^n*2654435761;h^=h>>>16;h=(h*0x45d9f3b)>>>0;h^=h>>>16;return h/0xffffffff;};
+  th+=(prng(1)-.5)*.18;
+  al+=(prng(2)-.5)*.18;
+  be+=(prng(3)-.5)*.18;
+
+  th=Math.max(.04,th);al=Math.max(.04,al);be=Math.max(.04,be);
   const tot=th+al+be;
   S.scores={theta:th/tot,alpha:al/tot,beta:be/tot};
   S.arq=detect(S.scores);
@@ -1120,16 +1140,34 @@ function score(){
 }
 
 function detect({theta:t,alpha:a,beta:b}){
-  // Umbral explorador reducido a .07 para menos casos neutros
-  if(Math.max(t,a,b)-Math.min(t,a,b)<.07)return'explorador';
-  // Umbral de dominancia reducido a .05 → más arquetipos simples posibles
-  const M=.05;
-  const td=t>a+M&&t>b+M,ad=a>t+M&&a>b+M,bd=b>t+M&&b>a+M;
-  if(td&&!ad&&!bd)return'visionario';
-  if(ad&&!td&&!bd)return'testigo';
-  if(bd&&!td&&!ad)return'estratega';
-  // Dual: par más fuerte
-  return[['sabio',a+t],['guerrero',b+a],['creador',b+t]].sort((x,y)=>y[1]-x[1])[0][0];
+  const spread=Math.max(t,a,b)-Math.min(t,a,b);
+  if(spread<.05)return'explorador';
+
+  // Ordenar las tres dimensiones
+  const sorted=[['theta',t],['alpha',a],['beta',b]].sort((x,y)=>y[1]-x[1]);
+  const [top,mid,low]=sorted;
+  const gap1=top[1]-mid[1]; // diferencia entre 1º y 2º
+  const gap2=mid[1]-low[1]; // diferencia entre 2º y 3º
+
+  // Si el 1º domina claramente sobre los otros dos → arquetipo simple
+  if(gap1>.08&&top[1]-low[1]>.12){
+    if(top[0]==='theta')return'visionario';
+    if(top[0]==='alpha')return'testigo';
+    if(top[0]==='beta')return'estratega';
+  }
+
+  // Si los dos primeros están cerca y el tercero está lejos → arquetipo dual
+  if(gap1<.1&&gap2>.06){
+    const pair=new Set([top[0],mid[0]]);
+    if(pair.has('alpha')&&pair.has('theta'))return'sabio';
+    if(pair.has('beta')&&pair.has('alpha'))return'guerrero';
+    if(pair.has('beta')&&pair.has('theta'))return'creador';
+  }
+
+  // Zona gris: el más alto gana pero con umbral más bajo
+  if(top[0]==='theta')return'visionario';
+  if(top[0]==='alpha')return'testigo';
+  return'estratega';
 }
 
 /* ── REGISTER ── */
